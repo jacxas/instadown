@@ -6,7 +6,16 @@ let currentTab = 'perfil';
 let downloadsRemaining = 2;
 let isPremium = false;
 let userId = localStorage.getItem('userId') || 'user_' + Math.random().toString(36).substr(2, 9);
-const API_BASE = window.location.origin;
+
+// Configurar URL del backend
+const API_BASE = (() => {
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:5000';
+  }
+  return 'https://instadown-backend.onrender.com';
+})();
+
+console.log('🔗 Backend URL:', API_BASE);
 
 // Guardar userId
 localStorage.setItem('userId', userId);

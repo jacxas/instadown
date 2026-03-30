@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: instadown-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python python_backend.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: PORT
+        value: 5000
+    healthCheckPath: /health
