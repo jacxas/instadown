@@ -271,37 +271,30 @@ function showNotification(message, type = 'info') {
 
 // Modal functionality
 function openModal(type) {
-    const modal = document.getElementById('modal');
-    const modalContent = document.getElementById('modalContent');
-    
-    if (type === 'premium') {
-        modalContent.innerHTML = `
-            <div class="premium-modal">
-                <h2>InstaDown Premium</h2>
-                <div class="price-highlight">
-                    <span class="price">$0.25</span>
-                    <span class="period">/mes</span>
-                </div>
-                <ul class="premium-features">
-                    <li>✓ Descargas ilimitadas</li>
-                    <li>✓ Descarga múltiple</li>
-                    <li>✓ Sin anuncios</li>
-                    <li>✓ Máxima calidad</li>
-                    <li>✓ Soporte prioritario</li>
-                    <li>✓ Descarga de historias</li>
-                    <li>✓ Descarga de destacados</li>
-                </ul>
-                <button class="premium-btn" onclick="subscribePremium()">Obtener Premium - $0.25/mes</button>
-                <p class="guarantee">Garantía de 7 días</p>
-            </div>
-        `;
+    const modal = document.getElementById(`${type}Modal`);
+    if (modal) {
+        modal.classList.add('active');
+        document.body.style.overflow = 'hidden';
     }
-    
-    modal.style.display = 'flex';
 }
 
-function closeModal() {
-    document.getElementById('modal').style.display = 'none';
+function closeModal(type) {
+    if (type) {
+        const modal = document.getElementById(`${type}Modal`);
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    } else {
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.classList.remove('active');
+        });
+    }
+    document.body.style.overflow = '';
+}
+
+function switchModal(from, to) {
+    closeModal(from);
+    setTimeout(() => openModal(to), 200);
 }
 
 // Premium subscription
@@ -318,7 +311,7 @@ function subscribePremium() {
         if (data.success) {
             isPremium = true;
             downloadsRemaining = Infinity;
-            closeModal();
+            closeModal('premium');
             showNotification('¡Bienvenido a Premium! Ahora tienes descargas ilimitadas', 'success');
             updateDownloadsCounter();
         }
@@ -327,12 +320,43 @@ function subscribePremium() {
 }
 
 // Close modal when clicking outside
-window.onclick = function(event) {
-    const modal = document.getElementById('modal');
-    if (event.target === modal) {
-        closeModal();
-    }
-}
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+    });
+});
+
+// FAQ functionality
+document.querySelectorAll('.faq-question').forEach(question => {
+    question.addEventListener('click', () => {
+        const item = question.parentElement;
+        const isActive = item.classList.contains('active');
+
+        document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('active'));
+
+        if (!isActive) {
+            item.classList.add('active');
+        }
+    });
+});
+
+// Form submissions
+document.querySelectorAll('.auth-form').forEach(form => {
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        showNotification('Cuenta creada exitosamente!', 'success');
+        closeModal('register');
+        closeModal('login');
+    });
+});
+
+document.querySelector('.payment-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    subscribePremium();
+});
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
