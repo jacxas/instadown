@@ -12,7 +12,7 @@ const API_BASE = (() => {
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://localhost:5000';
   }
-  return 'https://instadown-backend.onrender.com';
+  return 'https://instadown-backend-th3j.onrender.com';
 })();
 
 console.log('🔗 Backend URL:', API_BASE);
