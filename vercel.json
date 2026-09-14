@@ -1,4 +1,5 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "builds": [
     {
@@ -6,11 +7,27 @@
       "use": "@vercel/node"
     },
     {
-      "src": "instagram_downloader.py",
-      "use": "@vercel/python"
+      "src": "index.html",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "styles.css",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "script.js",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "script_v2.js",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
+    {
+      "src": "/(.*\\.(css|js|png|jpg|jpeg|svg|ico|webmanifest))",
+      "dest": "/$1"
+    },
     {
       "src": "/api/(.*)",
       "dest": "server.js"
@@ -21,7 +38,6 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production",
-    "PORT": "3000"
+    "NODE_ENV": "production"
   }
 }

@@ -289,3 +289,6 @@ app.listen(PORT, () => {
     console.log(`✓ Frontend: http://localhost:${PORT}`);
     console.log(`✓ API Health: http://localhost:${PORT}/health\n`);
 });
+
+// Export para entornos serverless (Vercel) - mantiene app.listen para uso local
+module.exports = app;
