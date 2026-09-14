@@ -226,3 +226,7 @@ Para reportar problemas o sugerencias, contacta a: support@instadown.local
 ---
 
 **InstaDown Pro v2.0** - Descargador de Instagram nativo y funcional ✨
+
+---
+
+Última actualización: 2026-09-13
