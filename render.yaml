@@ -1,13 +1,37 @@
 services:
   - type: web
-    name: instadown-backend
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python python_backend.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-      - key: PORT
-        value: 5000
+    name: instadown
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
     healthCheckPath: /health
+    # El store JSON y las descargas necesitan disco persistente.
+    disk:
+      name: instadown-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data/data
+      - key: DOWNLOADS_DIR
+        value: /var/data/downloads
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PAYMENTS_PROVIDER
+        value: stripe
+      - key: PREMIUM_PRICE_CENTS
+        value: "100"
+      # Configurar a mano en el dashboard:
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: INSTAGRAM_USERNAME
+        sync: false
+      - key: INSTAGRAM_PASSWORD
+        sync: false
