@@ -10,7 +10,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test --test-timeout=20000 test/*.test.js",
-    "check": "node --check server.js && node --check src/app.js && node --check public/app.js",
+    "check": "node --check server.js && node --check api/index.js && node --check src/app.js && node --check src/instagram-native.js && node --check public/app.js",
     "python:check": "python3 -m py_compile instagram_downloader.py python_backend.py"
   },
   "keywords": [

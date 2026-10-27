@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -125,23 +126,30 @@ def media_pk(client, url: str) -> str:
     raise DownloadError("No se pudo interpretar la URL de la publicación")
 
 
-def write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as handle:
-        handle.write(payload)
+def save_downloaded_media(result: Any, target_path: Path) -> Path:
+    """Guarda el resultado de instagrapi tanto si devuelve Path como bytes."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(result, (bytes, bytearray)):
+        target_path.write_bytes(result)
+        return target_path
+    source = Path(str(result))
+    if source.resolve() != target_path.resolve():
+        shutil.move(str(source), str(target_path))
+    return target_path
 
 
 def download_one(client, media, target_dir: Path, name: str) -> Optional[Dict[str, str]]:
     """Descarga una foto o un vídeo y devuelve su descriptor."""
     media_type = getattr(media, "media_type", None)
     pk = getattr(media, "pk", None)
+    target_dir.mkdir(parents=True, exist_ok=True)
     if media_type == 1:
         path = target_dir / f"{name}.jpg"
-        write_bytes(path, client.photo_download(pk))
+        save_downloaded_media(client.photo_download(pk, folder=target_dir), path)
         return {"file": str(path), "type": "photo"}
     if media_type == 2:
         path = target_dir / f"{name}.mp4"
-        write_bytes(path, client.video_download(pk))
+        save_downloaded_media(client.video_download(pk, folder=target_dir), path)
         return {"file": str(path), "type": "video"}
     return None
 
@@ -156,7 +164,7 @@ def action_get_user_info(client, username: str, out_dir: Path) -> Dict[str, Any]
         "follower_count": user.follower_count,
         "following_count": user.following_count,
         "media_count": user.media_count,
-        "profile_pic_url": user.profile_pic_url,
+        "profile_pic_url": str(user.profile_pic_url) if user.profile_pic_url else "",
         "is_private": user.is_private,
     }
 
@@ -199,8 +207,12 @@ def action_download_profile_pic(client, username: str, out_dir: Path) -> Dict[st
         raise DownloadError("El usuario no tiene foto de perfil pública")
 
     target_dir = out_dir / f"profile_{username}"
+    target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / "avatar.jpg"
-    write_bytes(path, client.photo_download_by_url(str(user.profile_pic_url), "avatar"))
+    save_downloaded_media(
+        client.photo_download_by_url(str(user.profile_pic_url), "avatar", folder=target_dir),
+        path,
+    )
 
     return {
         "username": user.username,

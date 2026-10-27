@@ -1,17 +1,21 @@
 'use strict';
 
 /**
- * Puente hacia instagram_downloader.py.
+ * Orquestador de descargas de Instagram.
  *
- * Reglas que antes no existían y causaban fallos y bloqueos:
- *  - timeout: si Instagram no responde, el proceso hijo se mata.
- *  - sin shell: `spawn` con array de argumentos (nada de interpolación).
- *  - entorno filtrado: el hijo no hereda secretos (SESSION_SECRET, STRIPE_*).
- *  - stdout acotado: un bucle infinito no puede llenar la memoria.
+ * - En entornos serverless (Vercel) o sin credenciales de Python/instagrapi,
+ *   usa el extractor nativo en Node.js (`src/instagram-native.js`), evitando
+ *   depender de `python3` ni `instagrapi`.
+ * - Si se configura `PYTHON_BIN` (p. ej. en la suite de tests) o se definen
+ *   `INSTAGRAM_USERNAME` + `INSTAGRAM_PASSWORD` en un servidor con Python,
+ *   ejecuta `instagram_downloader.py` con timeout, entorno filtrado y fallback
+ *   automático al extractor nativo.
  */
 
 const { spawn } = require('child_process');
 const path = require('path');
+
+const { runNativeInstagramAction, NativeDownloadError } = require('./instagram-native');
 
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -40,6 +44,7 @@ const ALLOWED_ENV = [
   'NO_PROXY',
   'INSTAGRAM_USERNAME',
   'INSTAGRAM_PASSWORD',
+  'INSTAGRAM_SESSIONID',
 ];
 
 function buildEnv(baseEnv = process.env) {
@@ -69,13 +74,7 @@ function parseResult(stdout) {
   return null;
 }
 
-/**
- * Ejecuta una acción del descargador y devuelve sus datos.
- * @param {string} action
- * @param {string} argument
- * @param {{ config: object, outDir: string, logger?: Console }} options
- */
-function runInstagramAction(action, argument, { config, outDir, logger = console }) {
+function runPythonAction(action, argument, { config, outDir, logger = console }) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(config.root, 'instagram_downloader.py');
     const pythonBin = process.env.PYTHON_BIN || 'python3';
@@ -90,7 +89,7 @@ function runInstagramAction(action, argument, { config, outDir, logger = console
         shell: false,
         windowsHide: true,
       });
-    } catch (err) {
+    } catch {
       reject(new InstagramError('No se pudo iniciar el descargador', { status: 500, code: 'spawn_failed' }));
       return;
     }
@@ -160,7 +159,7 @@ function runInstagramAction(action, argument, { config, outDir, logger = console
           reject,
           new InstagramError(parsed.error || 'No se pudo completar la operación', {
             status: 422,
-            code: 'instagram_rejected',
+            code: parsed.code || 'instagram_rejected',
           }),
         );
       }
@@ -182,4 +181,55 @@ function runInstagramAction(action, argument, { config, outDir, logger = console
   });
 }
 
-module.exports = { runInstagramAction, InstagramError, parseResult, buildEnv };
+async function runNativeWrapped(action, argument, { config }) {
+  try {
+    return await runNativeInstagramAction(action, argument, {
+      config,
+      fetchImpl: config?.instagram?.fetchImpl || fetch,
+    });
+  } catch (err) {
+    if (err instanceof NativeDownloadError) {
+      throw new InstagramError(err.message, {
+        status: err.status,
+        code: err.code,
+        retryable: err.retryable,
+      });
+    }
+    throw new InstagramError('No se pudo completar la operación con Instagram', {
+      status: 502,
+      code: 'instagram_failed',
+      retryable: true,
+    });
+  }
+}
+
+/**
+ * Ejecuta una acción del descargador y devuelve sus datos.
+ * @param {string} action
+ * @param {string} argument
+ * @param {{ config: object, outDir: string, logger?: Console }} options
+ */
+async function runInstagramAction(action, argument, { config, outDir, logger = console }) {
+  // 1) Si PYTHON_BIN está definido explícitamente (p. ej. en tests), respetarlo de forma directa.
+  if (process.env.PYTHON_BIN) {
+    return runPythonAction(action, argument, { config, outDir, logger });
+  }
+
+  // 2) Si hay credenciales de usuario/contraseña de Instagram y no estamos en serverless,
+  //    intentar primero con Python/instagrapi y usar el extractor Node.js como respaldo.
+  const hasPythonCreds = Boolean(config?.instagram?.username && config?.instagram?.password);
+  if (hasPythonCreds && !config?.isServerless) {
+    try {
+      return await runPythonAction(action, argument, { config, outDir, logger });
+    } catch (pyErr) {
+      logger.warn?.(`[instagram] fallback a extractor nativo Node tras fallo Python: ${pyErr.message}`);
+      return runNativeWrapped(action, argument, { config });
+    }
+  }
+
+  // 3) Por defecto (Vercel serverless, contenedores sin credenciales o ejecución local pura en Node):
+  //    usar el extractor nativo en Node.js sin requerir Python ni instagrapi.
+  return runNativeWrapped(action, argument, { config });
+}
+
+module.exports = { runInstagramAction, runPythonAction, InstagramError, parseResult, buildEnv };

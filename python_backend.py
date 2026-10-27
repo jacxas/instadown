@@ -26,6 +26,7 @@ import functools
 import logging
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -104,7 +105,7 @@ class InstagramDownloader:
                 "follower_count": user.follower_count,
                 "following_count": user.following_count,
                 "media_count": user.media_count,
-                "profile_pic_url": user.profile_pic_url,
+                "profile_pic_url": str(user.profile_pic_url) if user.profile_pic_url else "",
                 "is_private": user.is_private,
             }
         except Exception as exc:
@@ -148,15 +149,27 @@ class InstagramDownloader:
             return None
 
     @staticmethod
+    def _save_result(result, target: Path) -> Path:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(result, (bytes, bytearray)):
+            target.write_bytes(result)
+            return target
+        src = Path(str(result))
+        if src.resolve() != target.resolve():
+            shutil.move(str(src), str(target))
+        return target
+
+    @staticmethod
     def _save(media, folder: Path, index: int) -> Optional[str]:
         try:
+            folder.mkdir(parents=True, exist_ok=True)
             if media.media_type == 1:
                 target = folder / f"photo_{index}.jpg"
-                target.write_bytes(client.photo_download(media.pk))
+                InstagramDownloader._save_result(client.photo_download(media.pk, folder=folder), target)
                 return str(target)
             if media.media_type == 2:
                 target = folder / f"video_{index}.mp4"
-                target.write_bytes(client.video_download(media.pk))
+                InstagramDownloader._save_result(client.video_download(media.pk, folder=folder), target)
                 return str(target)
         except Exception as exc:
             logger.error("Error saving media: %s", exc)
@@ -169,7 +182,10 @@ class InstagramDownloader:
             folder = DOWNLOADS_DIR / f"profile_{username}"
             folder.mkdir(parents=True, exist_ok=True)
             target = folder / "avatar.jpg"
-            target.write_bytes(client.photo_download_by_url(str(user.profile_pic_url), "avatar"))
+            InstagramDownloader._save_result(
+                client.photo_download_by_url(str(user.profile_pic_url), "avatar", folder=folder),
+                target,
+            )
             return str(target)
         except Exception as exc:
             logger.error("Error downloading profile pic: %s", exc)

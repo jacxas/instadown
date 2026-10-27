@@ -3,8 +3,11 @@
 Descargador de Instagram (fotos, vídeos, reels, historias, destacados y foto de perfil)
 con planes **Gratis** y **Premium**, cuota diaria y cobro real mediante Stripe.
 
-El servidor Node (`server.js`) sirve el frontend y la API en el mismo origen y ejecuta
-`instagram_downloader.py` como proceso hijo para hablar con Instagram.
+El servidor Node (`server.js` en contenedores/servidores persistentes y `api/index.js` en
+Vercel Serverless) sirve el frontend y la API en el mismo origen. Extrae publicaciones,
+reels, vídeos, carruseles y perfiles públicos directamente desde Node.js (sin requerir
+Python), y puede usar `instagram_downloader.py` o `INSTAGRAM_SESSIONID` cuando se
+configuran credenciales.
 
 ---
 
@@ -45,7 +48,8 @@ Requisitos: Node >= 18.17 y Python 3.10+ con `pip install -r requirements.txt`.
 | `PREMIUM_PRICE_CENTS` | no | Precio en centavos. Por defecto `100` ($1) |
 | `PREMIUM_PRICE_CURRENCY` | no | Por defecto `usd` |
 | `FREE_DAILY_LIMIT` | no | Descargas gratis por día (por defecto `2`) |
-| `INSTAGRAM_USERNAME` / `INSTAGRAM_PASSWORD` | no | Cuenta dedicada; mejora la fiabilidad |
+| `INSTAGRAM_SESSIONID` | no | Cookie de sesión opcional para habilitar historias y destacados en Node/Vercel |
+| `INSTAGRAM_USERNAME` / `INSTAGRAM_PASSWORD` | no | Cuenta dedicada opcional para el cliente Python (`instagrapi`) |
 | `ADMIN_TOKEN` | no | Si se define, habilita `POST /api/admin/grant` |
 | `DATA_DIR` / `DOWNLOADS_DIR` | no | Persistencia y archivos temporales |
 | `CORS_ORIGINS` | no | Vacío = mismo origen (recomendado) |
@@ -126,7 +130,17 @@ ni credenciales.
 
 ## Despliegue
 
-### Docker (recomendado)
+### Vercel (Serverless + CDN estático)
+
+`vercel.json` y `api/index.js` enrutan `/api/*` y `/health` a la aplicación Express en
+`@vercel/node`, mientras `public/` se sirve desde el CDN. Las descargas públicas usan el
+extractor nativo en Node.js y tokens firmados sin estado (`/api/files/s1...`), por lo que
+funcionan entre múltiples instancias serverless sin disco compartido.
+
+Variables recomendadas en el dashboard de Vercel: `SESSION_SECRET`, `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET` (y opcionalmente `INSTAGRAM_SESSIONID` para historias/destacados).
+
+### Docker (recomendado para servidor dedicado)
 
 ```bash
 docker build -t instadown .

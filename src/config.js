@@ -5,6 +5,8 @@
  * para que el resto del código no dependa de `process.env` disperso.
  */
 
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -39,20 +41,68 @@ function resolvePaymentsProvider(env) {
   return env.STRIPE_SECRET_KEY ? 'stripe' : 'disabled';
 }
 
+function resolveAppUrl(env, port) {
+  if (env.APP_URL) return env.APP_URL.replace(/\/+$/, '');
+  if (env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${env.VERCEL_PROJECT_PRODUCTION_URL.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  }
+  if (env.VERCEL_URL) {
+    return `https://${env.VERCEL_URL.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  }
+  return `http://localhost:${port}`;
+}
+
+function resolveFallbackSecret(env, dataDir, isServerless) {
+  if (isServerless) {
+    // En funciones serverless (Vercel), cada instancia debe compartir el mismo
+    // secreto de respaldo para que las cookies y tokens de descarga funcionen
+    // entre invocaciones aunque aún no se haya configurado SESSION_SECRET.
+    const seed = [
+      'instadown-serverless-v1',
+      env.VERCEL_PROJECT_ID || '',
+      env.VERCEL_ORG_ID || '',
+      env.VERCEL_GIT_REPO_OWNER || '',
+      env.VERCEL_GIT_REPO_SLUG || '',
+      env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL || '',
+    ].join('|');
+    return crypto.createHash('sha256').update(seed).digest('hex');
+  }
+
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    const secretFile = path.join(dataDir, '.session_secret');
+    if (fs.existsSync(secretFile)) {
+      const saved = fs.readFileSync(secretFile, 'utf8').trim();
+      if (saved.length >= 32) return saved;
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(secretFile, `${generated}\n`, { mode: 0o600 });
+    return generated;
+  } catch {
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+
 function loadConfig(env = process.env) {
   const port = int(env.PORT, 3000);
-  const appUrl = (env.APP_URL || `http://localhost:${port}`).replace(/\/+$/, '');
+  const isServerless = Boolean(env.VERCEL || env.AWS_LAMBDA_FUNCTION_NAME || env.NETLIFY);
+  const appUrl = resolveAppUrl(env, port);
+
+  // En entornos serverless /var/task es de solo lectura: usar /tmp por defecto.
+  const dataDir =
+    env.DATA_DIR || (isServerless ? path.join(os.tmpdir(), 'instadown-data') : path.join(ROOT, 'data'));
+  const downloadsDir =
+    env.DOWNLOADS_DIR ||
+    (isServerless ? path.join(os.tmpdir(), 'instadown-downloads') : path.join(ROOT, 'downloads'));
 
   let sessionSecret = env.SESSION_SECRET || '';
   let ephemeralSecret = false;
   if (!sessionSecret) {
-    // Sin secreto estable las sesiones se invalidan al reiniciar. Aceptable en
-    // desarrollo, pero en producción se exige uno explícito.
-    sessionSecret = crypto.randomBytes(32).toString('hex');
+    if (bool(env.REQUIRE_SESSION_SECRET, false)) {
+      throw new Error('SESSION_SECRET es obligatorio cuando REQUIRE_SESSION_SECRET está activo');
+    }
+    sessionSecret = resolveFallbackSecret(env, dataDir, isServerless);
     ephemeralSecret = true;
-  }
-  if (env.NODE_ENV === 'production' && ephemeralSecret) {
-    throw new Error('SESSION_SECRET es obligatorio en producción');
   }
 
   const paymentsProvider = resolvePaymentsProvider(env);
@@ -60,22 +110,25 @@ function loadConfig(env = process.env) {
   return {
     env: env.NODE_ENV || 'development',
     isProduction: env.NODE_ENV === 'production',
+    isServerless,
     port,
     appUrl,
     root: ROOT,
     publicDir: path.join(ROOT, 'public'),
-    dataDir: env.DATA_DIR || path.join(ROOT, 'data'),
-    downloadsDir: env.DOWNLOADS_DIR || path.join(ROOT, 'downloads'),
+    dataDir,
+    downloadsDir,
     sessionSecret,
     ephemeralSecret,
     // Identificador de la cookie de sesión anónima (el usuario no se registra).
     sessionCookieName: 'instadown_sid',
+    quotaCookieName: 'instadown_quota',
     sessionTtlDays: int(env.SESSION_TTL_DAYS, 180),
     freeDailyLimit: int(env.FREE_DAILY_LIMIT, 2),
     adminToken: env.ADMIN_TOKEN || '',
     instagram: {
       username: env.INSTAGRAM_USERNAME || '',
       password: env.INSTAGRAM_PASSWORD || '',
+      sessionId: env.INSTAGRAM_SESSIONID || '',
       // Corta el proceso de Python si Instagram no responde.
       timeoutMs: int(env.INSTAGRAM_TIMEOUT_MS, 90_000),
     },

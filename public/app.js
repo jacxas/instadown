@@ -3,16 +3,34 @@
 /**
  * InstaDown — frontend.
  *
- * Reglas que cambiaron respecto a la versión anterior:
+ * Reglas principales:
  *  1. El estado del plan y de la cuota SIEMPRE viene del servidor (`/api/me`).
  *     El cliente no puede "activar" Premium: solo pide un checkout.
- *  2. No se usa `innerHTML` con datos de Instagram sin escapar (había XSS en
- *     bio, caption y nombre).
+ *  2. No se usa `innerHTML` con datos de Instagram sin escapar (evita XSS).
  *  3. Sin `onclick` inline: se usan `data-action`, compatible con la CSP.
- *  4. Las URLs de la API son relativas: funciona en cualquier dominio.
+ *  4. Las URLs de la API son relativas: funciona en cualquier dominio (local, Docker, Vercel, Render).
+ *  5. Detección automática del tipo de entrada (URL de post/reel/historia/perfil vs @usuario)
+ *     para que pegar un enlace en la pestaña por defecto (`PERFIL`) funcione sin dar 404.
  */
 
 const API = '';
+const USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
+const RESERVED_PATHS = new Set([
+  'p',
+  'reel',
+  'reels',
+  'tv',
+  'stories',
+  'share',
+  'explore',
+  'accounts',
+  'direct',
+  'about',
+  'legal',
+  'developer',
+  'graphql',
+  'api',
+]);
 
 const state = {
   config: null,
@@ -22,10 +40,10 @@ const state = {
 };
 
 const PLACEHOLDERS = {
-  perfil: 'Inserta nombre de usuario (ej: instagram)',
+  perfil: 'Inserta nombre de usuario o enlace (ej: instagram)',
   foto: 'Inserta enlace de la publicación (ej: https://www.instagram.com/p/...)',
   video: 'Inserta enlace del video (ej: https://www.instagram.com/p/...)',
-  historias: 'Inserta nombre de usuario',
+  historias: 'Inserta nombre de usuario o enlace de historia',
   reels: 'Inserta enlace del reel (ej: https://www.instagram.com/reel/...)',
   dp: 'Inserta nombre de usuario',
   destacados: 'Inserta nombre de usuario',
@@ -52,20 +70,17 @@ function $all(selector, root = document) {
   return Array.from(root.querySelectorAll(selector));
 }
 
-/** Escapa texto para insertarlo en HTML. Evita XSS con datos de Instagram. */
-function esc(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/** Solo se aceptan URLs http(s) para atributos src/href. */
+/**
+ * Acepta URLs http(s) absolutas y rutas relativas del mismo origen (`/api/files/...`),
+ * rechazando `javascript:`, `data:` o URLs relativas de protocolo (`//otro.sitio`).
+ */
 function safeUrl(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.startsWith('//')) return null;
   try {
-    const url = new URL(String(value));
+    const base = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost';
+    const url = new URL(raw, base);
     return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
   } catch {
     return null;
@@ -75,6 +90,89 @@ function safeUrl(value) {
 function formatNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? new Intl.NumberFormat('es-AR').format(number) : '—';
+}
+
+/**
+ * Clasifica la entrada del usuario para enrutar correctamente aunque no haya
+ * cambiado manualmente de pestaña.
+ */
+function classifyInput(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) return { kind: 'empty' };
+
+  let maybeUrl = value;
+  if (/^(?:www\.|m\.)?(?:instagram\.com|instagr\.am)\//i.test(maybeUrl)) {
+    maybeUrl = `https://${maybeUrl}`;
+  }
+
+  if (/^https?:\/\//i.test(maybeUrl)) {
+    try {
+      const parsed = new URL(maybeUrl);
+      const host = parsed.hostname.toLowerCase();
+      const isIg =
+        host === 'instagram.com' ||
+        host.endsWith('.instagram.com') ||
+        host === 'instagr.am' ||
+        host.endsWith('.instagr.am');
+      if (!isIg) {
+        return { kind: 'invalid_url', url: maybeUrl };
+      }
+
+      const parts = parsed.pathname.split('/').filter(Boolean);
+
+      if (parts[0]?.toLowerCase() === 'share' && parts.length >= 2) {
+        return {
+          kind: 'post',
+          subtype: parts[1] === 'reel' || parts[1] === 'reels' ? 'reels' : 'foto',
+          url: parsed.href,
+        };
+      }
+      if (parts.length >= 2 && ['p', 'reel', 'reels', 'tv'].includes(parts[0])) {
+        return {
+          kind: 'post',
+          subtype: parts[0] === 'p' ? 'foto' : 'reels',
+          url: parsed.href,
+        };
+      }
+      if (
+        parts.length >= 3 &&
+        ['p', 'reel', 'reels', 'tv'].includes(parts[1]) &&
+        !RESERVED_PATHS.has(parts[0].toLowerCase()) &&
+        USERNAME_RE.test(parts[0])
+      ) {
+        return {
+          kind: 'post',
+          subtype: parts[1] === 'p' ? 'foto' : 'reels',
+          url: parsed.href,
+        };
+      }
+      if (host.endsWith('instagr.am') && parts.length === 1) {
+        return { kind: 'post', subtype: 'foto', url: parsed.href };
+      }
+      if (parts[0] === 'stories' && parts.length >= 2) {
+        if (parts[1] === 'highlights') {
+          return { kind: 'highlights_url', url: parsed.href };
+        }
+        if (USERNAME_RE.test(parts[1])) {
+          return { kind: 'stories', username: parts[1] };
+        }
+      }
+      if (parts.length >= 1 && !RESERVED_PATHS.has(parts[0].toLowerCase()) && USERNAME_RE.test(parts[0])) {
+        return { kind: 'username', username: parts[0] };
+      }
+
+      return { kind: 'invalid_url', url: parsed.href };
+    } catch {
+      return { kind: 'invalid' };
+    }
+  }
+
+  const cleanUser = value.replace(/^@/, '');
+  if (USERNAME_RE.test(cleanUser)) {
+    return { kind: 'username', username: cleanUser };
+  }
+
+  return { kind: 'invalid' };
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -93,10 +191,16 @@ async function api(path, { method = 'GET', body } = {}) {
   let payload = null;
   try {
     payload = await response.json();
-  } catch { /* respuesta sin JSON */ }
+  } catch {
+    /* respuesta sin JSON */
+  }
 
   if (!response.ok || payload?.success === false) {
-    throw new ApiError(payload?.error || `Error ${response.status}`, response.status, payload?.code, payload);
+    const fallbackMsg =
+      response.status === 404
+        ? 'El servicio de descargas no encontró la ruta solicitada (Error 404).'
+        : `Error ${response.status}`;
+    throw new ApiError(payload?.error || fallbackMsg, response.status, payload?.code, payload);
   }
   return payload;
 }
@@ -118,6 +222,7 @@ function notify(message, type = 'info') {
 
   const text = document.createElement('span');
   text.textContent = message; // textContent, no innerHTML
+
   const close = document.createElement('button');
   close.type = 'button';
   close.textContent = '×';
@@ -260,24 +365,83 @@ function currentInput() {
   return input ? input.value.trim() : '';
 }
 
-function tabToRequest(tab, value) {
-  const username = value.replace(/^@/, '');
-  switch (tab) {
-    case 'perfil':
-      return null; // se resuelve con GET /api/user/:username
-    case 'foto':
-    case 'video':
-    case 'reels':
-      return { path: '/api/download/post', body: { url: value } };
-    case 'historias':
-      return { path: '/api/download/stories', body: { username } };
-    case 'dp':
-      return { path: '/api/download/profile-pic', body: { username } };
-    case 'destacados':
-      return { path: '/api/download/highlights', body: { username } };
-    default:
-      return null;
+function activateTabSilently(tabName) {
+  const target = $(`.tab[data-tab="${tabName}"]`);
+  if (!target) return;
+  $all('.tab').forEach((entry) => entry.classList.toggle('active', entry === target));
+  state.tab = tabName;
+  const input = $('#urlInput');
+  if (input) {
+    input.placeholder = PLACEHOLDERS[state.tab] || 'Inserta enlace o nombre de usuario';
   }
+}
+
+function resolveAction(tab, rawValue) {
+  const classified = classifyInput(rawValue);
+
+  // Si el usuario pegó un enlace directo de post/reel/video, siempre descargamos
+  // la publicación aunque haya dejado seleccionada la pestaña PERFIL por defecto.
+  if (classified.kind === 'post') {
+    if (!['foto', 'video', 'reels'].includes(tab)) {
+      activateTabSilently(classified.subtype || 'foto');
+    }
+    return { mode: 'download', path: '/api/download/post', body: { url: classified.url } };
+  }
+
+  // Si pegó un enlace de historia `/stories/<usuario>/...`, ir a historias.
+  if (classified.kind === 'stories') {
+    activateTabSilently('historias');
+    return { mode: 'download', path: '/api/download/stories', body: { username: classified.username } };
+  }
+
+  if (classified.kind === 'highlights_url') {
+    return {
+      mode: 'error',
+      message: 'Para descargar destacados ingresá el nombre de usuario de la cuenta (ej: instagram).',
+    };
+  }
+
+  if (classified.kind === 'invalid_url') {
+    return {
+      mode: 'error',
+      message: 'URL inválida: ingresá un enlace válido de instagram.com o un nombre de usuario.',
+    };
+  }
+
+  if (classified.kind === 'username') {
+    const username = classified.username;
+    switch (tab) {
+      case 'historias':
+        return { mode: 'download', path: '/api/download/stories', body: { username } };
+      case 'dp':
+        return { mode: 'download', path: '/api/download/profile-pic', body: { username } };
+      case 'destacados':
+        return { mode: 'download', path: '/api/download/highlights', body: { username } };
+      case 'perfil':
+        return { mode: 'profile', username };
+      case 'foto':
+      case 'video':
+      case 'reels':
+        // Si escribió un @usuario estando en FOTO/VÍDEO/REELS, consultamos el perfil
+        // en lugar de fallar exigiendo una URL.
+        activateTabSilently('perfil');
+        return { mode: 'profile', username };
+      default:
+        return { mode: 'profile', username };
+    }
+  }
+
+  if (['foto', 'video', 'reels'].includes(tab)) {
+    return {
+      mode: 'error',
+      message: 'Pegá el enlace completo de la publicación o reel de Instagram (ej: https://www.instagram.com/p/...).',
+    };
+  }
+
+  return {
+    mode: 'error',
+    message: 'Ingresá un enlace válido de Instagram o un nombre de usuario (ej: @instagram).',
+  };
 }
 
 function resultsArea() {
@@ -299,8 +463,10 @@ function fileList(files) {
     const link = document.createElement('a');
     link.className = 'btn btn-primary btn-small';
     link.href = safeUrl(file.url) || '#';
+    if (file.name) link.setAttribute('download', file.name);
     link.rel = 'noopener';
-    link.textContent = file.type === 'video' ? `Descargar video (${file.name})` : `Descargar (${file.name})`;
+    const label = file.highlight ? `${file.highlight} — ${file.name}` : file.name;
+    link.textContent = file.type === 'video' ? `Descargar video (${label})` : `Descargar (${label})`;
     item.appendChild(link);
     list.appendChild(item);
   });
@@ -352,29 +518,31 @@ async function handleDownload() {
     return;
   }
 
+  const plan = resolveAction(state.tab, value);
+  if (plan.mode === 'error') {
+    showError(plan.message);
+    notify(plan.message, 'error');
+    return;
+  }
+
   setBusy(true);
   try {
-    if (state.tab === 'perfil') {
-      const username = value.replace(/^@/, '');
-      const info = await api(`/api/user/${encodeURIComponent(username)}`);
+    if (plan.mode === 'profile') {
+      const info = await api('/api/user', { method: 'POST', body: { username: plan.username } });
       renderProfile(info.data);
       notify('Perfil encontrado', 'success');
       return;
     }
 
-    const request = tabToRequest(state.tab, value);
-    if (!request) {
-      notify('Pestaña no soportada', 'error');
-      return;
-    }
-
-    const result = await api(request.path, { method: 'POST', body: request.body });
+    const result = await api(plan.path, { method: 'POST', body: plan.body });
     applyServerState(result);
+    const ttlMin = Math.max(
+      1,
+      Math.round((new Date(result.data.files[0].expiresAt).getTime() - Date.now()) / 60000),
+    );
     showResults({
       title: 'Descarga lista',
-      subtitle: `${result.data.files.length} archivo(s) disponible(s). Los enlaces caducan en ${Math.round(
-        (new Date(result.data.files[0].expiresAt).getTime() - Date.now()) / 60000,
-      )} minutos.`,
+      subtitle: `${result.data.files.length} archivo(s) disponible(s). Los enlaces caducan en ${ttlMin} minutos.`,
       files: result.data.files,
       extraNodes: result.data.caption
         ? [Object.assign(document.createElement('p'), { className: 'caption', textContent: result.data.caption })]
@@ -415,7 +583,7 @@ function applyServerState(payload) {
 }
 
 function renderProfile(profile) {
-  const avatar = safeUrl(profile.profile_pic_url);
+  const avatar = safeUrl(profile.avatar_url || profile.profile_pic_url);
   const wrapper = document.createElement('div');
   wrapper.className = 'profile-info';
 
@@ -425,6 +593,7 @@ function renderProfile(profile) {
     image.alt = `Foto de perfil de ${profile.username || 'usuario'}`;
     image.className = 'profile-pic';
     image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
     wrapper.appendChild(image);
   }
 
@@ -594,7 +763,9 @@ function handleCheckoutReturn() {
           clearInterval(poll);
           notify('¡Premium activado! Ya tenés descargas ilimitadas.', 'success');
         }
-      } catch { /* se reintenta */ }
+      } catch {
+        /* se reintenta */
+      }
       if (attempts >= 10) clearInterval(poll);
     }, 2000);
   } else if (status === 'cancelled') {
@@ -647,6 +818,13 @@ function bindEvents() {
         event.preventDefault();
         selectTab(trigger);
         break;
+      case 'pick-type': {
+        event.preventDefault();
+        const tab = $(`.tab[data-tab="${trigger.dataset.tab}"]`);
+        if (tab) selectTab(tab);
+        $('#urlInput')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        break;
+      }
       default:
         break;
     }

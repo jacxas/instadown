@@ -19,6 +19,7 @@ function securityHeaders(config) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com data:",
     "img-src 'self' data: https://*.cdninstagram.com https://*.fbcdn.net https://scontent.cdninstagram.com",
+    "media-src 'self' https://*.cdninstagram.com https://*.fbcdn.net",
     "connect-src 'self'",
     "form-action 'self' https://checkout.stripe.com",
     // En producción nadie puede embeber el sitio. Fuera de producción se permite
@@ -72,7 +73,7 @@ function corsAllowlist(config, env = process.env) {
     }
 
     if (req.method === 'OPTIONS') {
-      return res.sendStatus(origin && allowed.includes(origin) ? 204 : 204);
+      return res.sendStatus(204);
     }
     return next();
   };
@@ -83,8 +84,15 @@ function isSameOrigin(req, config) {
   if (!origin) return true; // clientes no-navegador (curl, tests)
   try {
     const originUrl = new URL(origin);
-    const host = req.headers.host;
-    if (host && originUrl.host === host) return true;
+    const candidateHosts = [
+      req.headers.host,
+      ...String(req.headers['x-forwarded-host'] || '')
+        .split(',')
+        .map((h) => h.trim())
+        .filter(Boolean),
+    ];
+    if (candidateHosts.some((h) => h && originUrl.host === h)) return true;
+
     return [config.appUrl, `http://localhost:${config.port}`, `http://127.0.0.1:${config.port}`]
       .filter(Boolean)
       .some((base) => {
