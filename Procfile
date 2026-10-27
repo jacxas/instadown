@@ -1,1 +1,1 @@
-web: python python_backend.py
+web: node server.js

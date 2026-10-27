@@ -1,3 +1,8 @@
+# Descargador (lo usa server.js vía instagram_downloader.py)
 instagrapi==2.0.0
 requests==2.31.0
 Pillow==10.0.0
+
+# Solo para el backend Flask opcional (python_backend.py)
+flask==3.0.3
+flask-cors==4.0.1

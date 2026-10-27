@@ -17,3 +17,8 @@ __pycache__/
 *.pyc
 *.pyo
 .vercel/
+
+# Datos de ejecución (no versionar)
+data/
+downloads/
+*.tmp
